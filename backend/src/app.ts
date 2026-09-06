@@ -1,5 +1,8 @@
 import express from "express";
 
+import { errorHandlerMiddleware } from "./middleware/error-handler.js";
+import { notFoundMiddleware } from "./middleware/not-found.js";
+import { requestContextMiddleware } from "./middleware/request-context.js";
 import { healthRouter } from "./routes/health.routes.js";
 
 export function createApp() {
@@ -7,6 +10,7 @@ export function createApp() {
 
   app.disable("x-powered-by");
 
+  app.use(requestContextMiddleware);
   app.use(express.json());
 
   app.use("/health", healthRouter);
@@ -19,6 +23,9 @@ export function createApp() {
       message: "Delta Backend API",
     });
   });
+
+  app.use(notFoundMiddleware);
+  app.use(errorHandlerMiddleware);
 
   return app;
 }

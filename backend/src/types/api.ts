@@ -4,3 +4,11 @@ export type ApiHealthResponse = {
   version: "v1";
   timestamp: string;
 };
+
+export type ApiErrorResponse = {
+  error: {
+    code: string;
+    message: string;
+    requestId: string;
+  };
+};
