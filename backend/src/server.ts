@@ -1,6 +1,22 @@
+import { once } from "node:events";
+import type {
+  Server,
+} from "node:http";
+
 import { createApp } from "./app.js";
+import {
+  loadAuthEnv,
+} from "./auth/config.js";
+import {
+  createDeltaAuth,
+} from "./auth/core.js";
+import {
+  createAuthDatabasePool,
+} from "./auth/database.js";
 import { loadEnv } from "./config/env.js";
-import { ApplicationState } from "./runtime/application-state.js";
+import {
+  ApplicationState,
+} from "./runtime/application-state.js";
 import {
   assertDatabaseReady,
   createDatabasePool,
@@ -11,74 +27,201 @@ import {
 } from "./storage/migrations.js";
 
 const env = loadEnv();
+const authEnv = loadAuthEnv();
 
-const applicationState = new ApplicationState();
+const applicationState =
+  new ApplicationState();
 
 const databasePool =
   createDatabasePool(env);
 
-const app = createApp(
-  applicationState,
-  {
-    databaseReady: () =>
-      isDatabaseReady(databasePool),
-  },
-);
+const authDatabasePool =
+  createAuthDatabasePool(env);
 
-const server = app.listen(
-  env.port,
-  "0.0.0.0",
-  async () => {
+let server: Server | undefined;
+let shuttingDown = false;
+
+let closeResourcesPromise:
+  Promise<void> | undefined;
+
+function closeDatabaseResources():
+  Promise<void> {
+  if (
+    closeResourcesPromise !== undefined
+  ) {
+    return closeResourcesPromise;
+  }
+
+  closeResourcesPromise =
+    (async () => {
+      const results =
+        await Promise.allSettled([
+          authDatabasePool.end(),
+          databasePool.end(),
+        ]);
+
+      const failures =
+        results.filter(
+          (
+            result,
+          ): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+
+      if (failures.length > 0) {
+        throw new Error(
+          failures
+            .map((failure) =>
+              failure.reason instanceof Error
+                ? failure.reason.message
+                : String(
+                    failure.reason,
+                  ),
+            )
+            .join("; "),
+        );
+      }
+    })();
+
+  return closeResourcesPromise;
+}
+
+async function closeServerIfRunning():
+  Promise<void> {
+  if (server === undefined) {
+    return;
+  }
+
+  await new Promise<void>(
+    (resolve) => {
+      server?.close(() => {
+        resolve();
+      });
+    },
+  );
+}
+
+async function startup(): Promise<void> {
+  try {
+    /*
+     * The listening socket is intentionally
+     * created only after storage and auth
+     * prerequisites have been accepted.
+     */
+    await assertDatabaseReady(
+      databasePool,
+    );
+
+    await runMigrations(
+      databasePool,
+    );
+
+    await assertDatabaseReady(
+      authDatabasePool,
+    );
+
+    const auth = createDeltaAuth(
+      authDatabasePool,
+      authEnv,
+    );
+
+    const app = createApp(
+      applicationState,
+      {
+        databaseReady: () =>
+          isDatabaseReady(
+            databasePool,
+          ),
+        authDatabaseReady: () =>
+          isDatabaseReady(
+            authDatabasePool,
+          ),
+      },
+      auth,
+    );
+
+    server = app.listen(
+      env.port,
+      "0.0.0.0",
+    );
+
+    server.on(
+      "error",
+      (error) => {
+        console.error(
+          JSON.stringify({
+            event: "server_error",
+            service:
+              "delta-backend",
+            message:
+              error.message,
+          }),
+        );
+
+        process.exitCode = 1;
+      },
+    );
+
+    await once(
+      server,
+      "listening",
+    );
+
+    if (shuttingDown) {
+      await closeServerIfRunning();
+      await closeDatabaseResources();
+      return;
+    }
+
+    applicationState.markReady();
+
+    console.log(
+      JSON.stringify({
+        event: "server_started",
+        service: "delta-backend",
+        environment: env.nodeEnv,
+        host: "0.0.0.0",
+        port: env.port,
+        phase:
+          applicationState.getPhase(),
+        database: "ready",
+        authentication: "ready",
+      }),
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event:
+          "server_startup_failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unknown startup error",
+      }),
+    );
+
+    process.exitCode = 1;
+
+    await closeServerIfRunning();
+
     try {
-      await assertDatabaseReady(databasePool);
-      await runMigrations(databasePool);
-
-      applicationState.markReady();
-
-      console.log(
-        JSON.stringify({
-          event: "server_started",
-          service: "delta-backend",
-          environment: env.nodeEnv,
-          host: "0.0.0.0",
-          port: env.port,
-          phase: applicationState.getPhase(),
-          database: "ready",
-        }),
-      );
-    } catch (error) {
+      await closeDatabaseResources();
+    } catch (
+      shutdownError: unknown
+    ) {
       console.error(
         JSON.stringify({
-          event: "server_startup_failed",
+          event:
+            "database_shutdown_failed",
           message:
-            error instanceof Error
-              ? error.message
-              : "Unknown startup error",
+            shutdownError instanceof Error
+              ? shutdownError.message
+              : "Unknown database shutdown error",
         }),
       );
-
-      process.exitCode = 1;
-
-      server.close(() => {
-        void databasePool.end();
-      });
     }
-  },
-);
-
-server.on("error", (error) => {
-  console.error(
-    JSON.stringify({
-      event: "server_error",
-      service: "delta-backend",
-      message: error.message,
-    }),
-  );
-
-  process.exitCode = 1;
-});
-
-let shuttingDown = false;
+  }
+}
 
 function shutdown(signal: string): void {
   if (shuttingDown) {
@@ -86,74 +229,118 @@ function shutdown(signal: string): void {
   }
 
   shuttingDown = true;
-  applicationState.markShuttingDown();
+
+  applicationState
+    .markShuttingDown();
 
   console.log(
     JSON.stringify({
-      event: "server_shutdown_started",
+      event:
+        "server_shutdown_started",
       signal,
-      phase: applicationState.getPhase(),
-      graceMs: env.shutdownGraceMs,
+      phase:
+        applicationState.getPhase(),
+      graceMs:
+        env.shutdownGraceMs,
     }),
   );
 
-  const forcedShutdownTimer = setTimeout(() => {
-    console.error(
-      JSON.stringify({
-        event: "server_shutdown_timeout",
-        graceMs: env.shutdownGraceMs,
-      }),
-    );
-
-    server.closeAllConnections();
-    process.exitCode = 1;
-  }, env.shutdownGraceMs);
-
-  forcedShutdownTimer.unref();
-
-  server.close((error) => {
-    if (error) {
-      clearTimeout(forcedShutdownTimer);
-
+  const forcedShutdownTimer =
+    setTimeout(() => {
       console.error(
         JSON.stringify({
-          event: "server_shutdown_failed",
-          message: error.message,
+          event:
+            "server_shutdown_timeout",
+          graceMs:
+            env.shutdownGraceMs,
         }),
       );
 
+      server?.closeAllConnections();
+
       process.exitCode = 1;
-      return;
-    }
 
-    void databasePool
-      .end()
-      .then(() => {
-        clearTimeout(forcedShutdownTimer);
+      void closeDatabaseResources();
+    }, env.shutdownGraceMs);
 
-        console.log(
+  forcedShutdownTimer.unref();
+
+  const finishShutdown =
+    async (
+      serverError?: Error,
+    ): Promise<void> => {
+      let failed =
+        serverError !== undefined;
+
+      if (
+        serverError !== undefined
+      ) {
+        console.error(
           JSON.stringify({
-            event: "server_shutdown_complete",
+            event:
+              "server_shutdown_failed",
+            message:
+              serverError.message,
           }),
         );
-      })
-      .catch((databaseError: unknown) => {
-        clearTimeout(forcedShutdownTimer);
+      }
+
+      try {
+        await closeDatabaseResources();
+      } catch (
+        databaseError: unknown
+      ) {
+        failed = true;
 
         console.error(
           JSON.stringify({
-            event: "database_shutdown_failed",
+            event:
+              "database_shutdown_failed",
             message:
               databaseError instanceof Error
                 ? databaseError.message
                 : "Unknown database shutdown error",
           }),
         );
+      }
 
+      clearTimeout(
+        forcedShutdownTimer,
+      );
+
+      if (failed) {
         process.exitCode = 1;
-      });
+        return;
+      }
+
+      console.log(
+        JSON.stringify({
+          event:
+            "server_shutdown_complete",
+        }),
+      );
+    };
+
+  if (server === undefined) {
+    void finishShutdown();
+    return;
+  }
+
+  server.close((error) => {
+    void finishShutdown(
+      error ?? undefined,
+    );
   });
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on(
+  "SIGTERM",
+  () => shutdown("SIGTERM"),
+);
+
+process.on(
+  "SIGINT",
+  () => shutdown("SIGINT"),
+);
+
+void startup();

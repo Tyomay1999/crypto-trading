@@ -63,6 +63,17 @@ export function createDeltaAuth(
       useSecureCookies:
         env.useSecureCookies,
 
+      /*
+       * Delta's reverse proxy overwrites
+       * X-Real-IP at the application boundary.
+       * Never accept arbitrary forwarded chains.
+       */
+      ipAddress: {
+        ipAddressHeaders: [
+          "x-real-ip",
+        ],
+      },
+
       database: {
         joins: true,
         validateSchema: true,

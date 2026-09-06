@@ -6,8 +6,6 @@ services:
       POSTGRES_DB: delta
       POSTGRES_USER: delta
       POSTGRES_PASSWORD: delta-local-development
-    ports:
-      - "5432:5432"
     volumes:
       - delta-postgres-data:/var/lib/postgresql
     healthcheck:
@@ -26,6 +24,8 @@ services:
     build:
       context: ./backend
     container_name: delta-backend
+    env_file:
+      - .env
     environment:
       PORT: "3001"
       NODE_ENV: production
@@ -34,7 +34,7 @@ services:
       DATABASE_CONNECT_TIMEOUT_MS: "3000"
       SHUTDOWN_GRACE_MS: "10000"
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     depends_on:
       postgres:
         condition: service_healthy

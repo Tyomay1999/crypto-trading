@@ -10,6 +10,7 @@ import type {
 
 export type HealthDependencies = {
   databaseReady: () => Promise<boolean>;
+  authDatabaseReady: () => Promise<boolean>;
 };
 
 export function createHealthRouter(
@@ -42,30 +43,47 @@ export function createHealthRouter(
     response.status(200).json(payload);
   });
 
-  router.get("/ready", async (_request, response) => {
-    const databaseReady =
-      await dependencies.databaseReady();
+  router.get(
+    "/ready",
+    async (_request, response) => {
+      const [
+        databaseReady,
+        authDatabaseReady,
+      ] = await Promise.all([
+        dependencies.databaseReady(),
+        dependencies.authDatabaseReady(),
+      ]);
 
-    const ready =
-      applicationState.isReady() &&
-      databaseReady;
+      const ready =
+        applicationState.isReady() &&
+        databaseReady &&
+        authDatabaseReady;
 
-    const payload: ApiHealthCheckResponse = {
-      status: ready ? "ok" : "not_ready",
-      service: "delta-backend",
-      version: "v1",
-      check: "ready",
-      phase: applicationState.getPhase(),
-      dependencies: {
-        database: databaseReady
+      const payload: ApiHealthCheckResponse = {
+        status: ready
           ? "ok"
-          : "unavailable",
-      },
-      timestamp: new Date().toISOString(),
-    };
+          : "not_ready",
+        service: "delta-backend",
+        version: "v1",
+        check: "ready",
+        phase: applicationState.getPhase(),
+        dependencies: {
+          database: databaseReady
+            ? "ok"
+            : "unavailable",
+          authentication: authDatabaseReady
+            ? "ok"
+            : "unavailable",
+        },
+        timestamp:
+          new Date().toISOString(),
+      };
 
-    response.status(ready ? 200 : 503).json(payload);
-  });
+      response
+        .status(ready ? 200 : 503)
+        .json(payload);
+    },
+  );
 
   return router;
 }

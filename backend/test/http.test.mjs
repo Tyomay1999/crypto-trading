@@ -9,10 +9,17 @@ import {
 
 const healthyDependencies = {
   databaseReady: async () => true,
+  authDatabaseReady: async () => true,
 };
 
 const unavailableDatabaseDependencies = {
   databaseReady: async () => false,
+  authDatabaseReady: async () => true,
+};
+
+const unavailableAuthDatabaseDependencies = {
+  databaseReady: async () => true,
+  authDatabaseReady: async () => false,
 };
 
 async function withServer(
@@ -257,6 +264,37 @@ test("readiness fails when database is unavailable", async () => {
       );
     },
     unavailableDatabaseDependencies,
+  );
+});
+
+test("readiness fails when authentication database is unavailable", async () => {
+  await withServer(
+    readyState(),
+    async (baseUrl) => {
+      const response = await fetch(
+        `${baseUrl}/health/ready`,
+      );
+
+      assert.equal(response.status, 503);
+
+      const payload = await response.json();
+
+      assert.equal(
+        payload.status,
+        "not_ready",
+      );
+
+      assert.equal(
+        payload.dependencies.database,
+        "ok",
+      );
+
+      assert.equal(
+        payload.dependencies.authentication,
+        "unavailable",
+      );
+    },
+    unavailableAuthDatabaseDependencies,
   );
 });
 

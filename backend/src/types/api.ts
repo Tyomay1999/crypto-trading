@@ -17,6 +17,7 @@ export type ApiHealthCheckResponse = {
   phase: ApplicationPhase;
   dependencies?: {
     database: "ok" | "unavailable";
+    authentication: "ok" | "unavailable";
   };
   timestamp: string;
 };
