@@ -9,6 +9,7 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "better-auth": "1.7.3",
     "express": "^5.1.0",
     "pg": "^8.23.0"
   },
@@ -16,6 +17,7 @@
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
+    "auth": "1.7.3",
     "typescript": "^5.9.0"
   }
 }
