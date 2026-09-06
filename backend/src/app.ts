@@ -19,14 +19,26 @@ import {
   createHealthRouter,
   type HealthDependencies,
 } from "./routes/health.routes.js";
+import {
+  createSessionRouter,
+  type SessionRoutesDependencies,
+} from "./routes/session.routes.js";
 import type {
   ApplicationState,
 } from "./runtime/application-state.js";
+
+type SessionManagementAppDependencies =
+  Omit<
+    SessionRoutesDependencies,
+    "auth"
+  >;
 
 export function createApp(
   applicationState: ApplicationState,
   healthDependencies: HealthDependencies,
   auth?: DeltaAuth,
+  sessionManagementDependencies?:
+    SessionManagementAppDependencies,
 ) {
   const app = express();
 
@@ -56,6 +68,26 @@ export function createApp(
    * has had the opportunity to consume it.
    */
   app.use(express.json());
+
+  if (
+    sessionManagementDependencies !==
+    undefined
+  ) {
+    if (auth === undefined) {
+      throw new Error(
+        "Session management requires Better Auth.",
+      );
+    }
+
+    app.use(
+      "/api/v1/auth/sessions",
+      createSessionRouter({
+        ...sessionManagementDependencies,
+        auth,
+      }),
+    );
+  }
+
 
   const healthRouter =
     createHealthRouter(

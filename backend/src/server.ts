@@ -11,6 +11,9 @@ import {
   createDeltaAuth,
 } from "./auth/core.js";
 import {
+  SessionActivityHeartbeat,
+} from "./auth/session-activity-heartbeat.js";
+import {
   createAuthDatabasePool,
 } from "./auth/database.js";
 import {
@@ -29,6 +32,9 @@ import {
 import {
   runMigrations,
 } from "./storage/migrations.js";
+import {
+  touchSessionActivity,
+} from "./storage/session-activity.js";
 
 const env = loadEnv();
 const authEnv = loadAuthEnv();
@@ -48,6 +54,19 @@ const applicationState =
 
 const databasePool =
   createDatabasePool(env);
+
+const sessionActivityHeartbeat =
+  new SessionActivityHeartbeat(
+    (
+      sessionId,
+      observedAt,
+    ) =>
+      touchSessionActivity(
+        databasePool,
+        sessionId,
+        observedAt,
+      ),
+  );
 
 const authDatabasePool =
   createAuthDatabasePool(env);
@@ -153,6 +172,24 @@ async function startup(): Promise<void> {
           ),
       },
       auth,
+      {
+        database:
+          databasePool,
+
+        trustedOrigins:
+          authEnv.trustedOrigins,
+
+        observeActivity:
+          (
+            sessionId,
+            observedAt,
+          ) =>
+            sessionActivityHeartbeat
+              .observe(
+                sessionId,
+                observedAt,
+              ),
+      },
     );
 
     server = app.listen(

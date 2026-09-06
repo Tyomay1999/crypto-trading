@@ -30,6 +30,22 @@ export function createDeltaAuth(
       ...env.trustedOrigins,
     ],
 
+    /*
+     * A3 owns the public session-management
+     * surface. These Better Auth HTTP routes
+     * expose lower-level Session/token contracts
+     * and must not bypass Delta's sanitized API.
+     *
+     * Programmatic auth.api.* calls remain
+     * available server-side.
+     */
+    disabledPaths: [
+      "/list-sessions",
+      "/revoke-session",
+      "/revoke-sessions",
+      "/revoke-other-sessions",
+    ],
+
     database,
 
     /*
