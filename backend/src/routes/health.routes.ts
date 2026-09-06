@@ -8,17 +8,16 @@ import type {
   ApiHealthResponse,
 } from "../types/api.js";
 
+export type HealthDependencies = {
+  databaseReady: () => Promise<boolean>;
+};
+
 export function createHealthRouter(
   applicationState: ApplicationState,
+  dependencies: HealthDependencies,
 ) {
   const router = Router();
 
-  /*
-   * Legacy compatibility endpoint.
-   *
-   * This preserves the initial Delta frontend/backend contract.
-   * Runtime dependency readiness is exposed separately via /ready.
-   */
   router.get("/", (_request, response) => {
     const payload: ApiHealthResponse = {
       status: "ok",
@@ -43,8 +42,13 @@ export function createHealthRouter(
     response.status(200).json(payload);
   });
 
-  router.get("/ready", (_request, response) => {
-    const ready = applicationState.isReady();
+  router.get("/ready", async (_request, response) => {
+    const databaseReady =
+      await dependencies.databaseReady();
+
+    const ready =
+      applicationState.isReady() &&
+      databaseReady;
 
     const payload: ApiHealthCheckResponse = {
       status: ready ? "ok" : "not_ready",
@@ -52,6 +56,11 @@ export function createHealthRouter(
       version: "v1",
       check: "ready",
       phase: applicationState.getPhase(),
+      dependencies: {
+        database: databaseReady
+          ? "ok"
+          : "unavailable",
+      },
       timestamp: new Date().toISOString(),
     };
 

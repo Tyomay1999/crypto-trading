@@ -15,6 +15,9 @@ export type ApiHealthCheckResponse = {
   version: "v1";
   check: "live" | "ready";
   phase: ApplicationPhase;
+  dependencies?: {
+    database: "ok" | "unavailable";
+  };
   timestamp: string;
 };
 

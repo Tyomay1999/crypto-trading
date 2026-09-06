@@ -1,26 +1,70 @@
 import { createApp } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { ApplicationState } from "./runtime/application-state.js";
+import {
+  assertDatabaseReady,
+  createDatabasePool,
+  isDatabaseReady,
+} from "./storage/database.js";
+import {
+  runMigrations,
+} from "./storage/migrations.js";
 
 const env = loadEnv();
 
 const applicationState = new ApplicationState();
-const app = createApp(applicationState);
 
-const server = app.listen(env.port, "0.0.0.0", () => {
-  applicationState.markReady();
+const databasePool =
+  createDatabasePool(env);
 
-  console.log(
-    JSON.stringify({
-      event: "server_started",
-      service: "delta-backend",
-      environment: env.nodeEnv,
-      host: "0.0.0.0",
-      port: env.port,
-      phase: applicationState.getPhase(),
-    }),
-  );
-});
+const app = createApp(
+  applicationState,
+  {
+    databaseReady: () =>
+      isDatabaseReady(databasePool),
+  },
+);
+
+const server = app.listen(
+  env.port,
+  "0.0.0.0",
+  async () => {
+    try {
+      await assertDatabaseReady(databasePool);
+      await runMigrations(databasePool);
+
+      applicationState.markReady();
+
+      console.log(
+        JSON.stringify({
+          event: "server_started",
+          service: "delta-backend",
+          environment: env.nodeEnv,
+          host: "0.0.0.0",
+          port: env.port,
+          phase: applicationState.getPhase(),
+          database: "ready",
+        }),
+      );
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "server_startup_failed",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unknown startup error",
+        }),
+      );
+
+      process.exitCode = 1;
+
+      server.close(() => {
+        void databasePool.end();
+      });
+    }
+  },
+);
 
 server.on("error", (error) => {
   console.error(
@@ -68,9 +112,9 @@ function shutdown(signal: string): void {
   forcedShutdownTimer.unref();
 
   server.close((error) => {
-    clearTimeout(forcedShutdownTimer);
-
     if (error) {
+      clearTimeout(forcedShutdownTimer);
+
       console.error(
         JSON.stringify({
           event: "server_shutdown_failed",
@@ -82,11 +126,32 @@ function shutdown(signal: string): void {
       return;
     }
 
-    console.log(
-      JSON.stringify({
-        event: "server_shutdown_complete",
-      }),
-    );
+    void databasePool
+      .end()
+      .then(() => {
+        clearTimeout(forcedShutdownTimer);
+
+        console.log(
+          JSON.stringify({
+            event: "server_shutdown_complete",
+          }),
+        );
+      })
+      .catch((databaseError: unknown) => {
+        clearTimeout(forcedShutdownTimer);
+
+        console.error(
+          JSON.stringify({
+            event: "database_shutdown_failed",
+            message:
+              databaseError instanceof Error
+                ? databaseError.message
+                : "Unknown database shutdown error",
+          }),
+        );
+
+        process.exitCode = 1;
+      });
   });
 }
 

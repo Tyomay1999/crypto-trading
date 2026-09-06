@@ -3,13 +3,17 @@ import express from "express";
 import { errorHandlerMiddleware } from "./middleware/error-handler.js";
 import { notFoundMiddleware } from "./middleware/not-found.js";
 import { requestContextMiddleware } from "./middleware/request-context.js";
-import { createHealthRouter } from "./routes/health.routes.js";
+import {
+  createHealthRouter,
+  type HealthDependencies,
+} from "./routes/health.routes.js";
 import type {
   ApplicationState,
 } from "./runtime/application-state.js";
 
 export function createApp(
   applicationState: ApplicationState,
+  healthDependencies: HealthDependencies,
 ) {
   const app = express();
 
@@ -18,7 +22,10 @@ export function createApp(
   app.use(requestContextMiddleware);
   app.use(express.json());
 
-  const healthRouter = createHealthRouter(applicationState);
+  const healthRouter = createHealthRouter(
+    applicationState,
+    healthDependencies,
+  );
 
   app.use("/health", healthRouter);
   app.use("/api/v1/health", healthRouter);
