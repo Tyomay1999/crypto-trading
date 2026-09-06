@@ -1,3 +1,7 @@
+import {
+  redactSensitiveHttpTarget,
+} from "../security/http-log-redaction.js";
+
 import { randomUUID } from "node:crypto";
 
 import type { NextFunction, Request, Response } from "express";
@@ -26,7 +30,13 @@ export function requestContextMiddleware(
   const requestId = resolveRequestId(request.header("x-request-id"));
   const startedAt = process.hrtime.bigint();
 
-  const requestPath = request.originalUrl.split("?", 1)[0];
+  const requestPath =
+    redactSensitiveHttpTarget(
+      request.originalUrl.split(
+        "?",
+        1,
+      )[0],
+    );
 
   response.locals.requestId = requestId;
   response.setHeader("x-request-id", requestId);

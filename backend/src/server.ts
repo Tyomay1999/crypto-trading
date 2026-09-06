@@ -13,6 +13,10 @@ import {
 import {
   createAuthDatabasePool,
 } from "./auth/database.js";
+import {
+  createAuthEmailDelivery,
+  loadAuthEmailEnv,
+} from "./auth/email-delivery.js";
 import { loadEnv } from "./config/env.js";
 import {
   ApplicationState,
@@ -28,6 +32,16 @@ import {
 
 const env = loadEnv();
 const authEnv = loadAuthEnv();
+
+const authEmailEnv =
+  loadAuthEmailEnv(
+    authEnv.baseUrl,
+  );
+
+const authEmailDelivery =
+  createAuthEmailDelivery(
+    authEmailEnv,
+  );
 
 const applicationState =
   new ApplicationState();
@@ -123,6 +137,7 @@ async function startup(): Promise<void> {
     const auth = createDeltaAuth(
       authDatabasePool,
       authEnv,
+      authEmailDelivery,
     );
 
     const app = createApp(
