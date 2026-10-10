@@ -63,6 +63,13 @@ import {
   type PasskeyAuthenticationAuthBridge,
   type PasskeyEnrollmentAuthBridge,
 } from "./routes/passkey.routes.js";
+import {
+  PostgresProjectionReader,
+} from "./projection/reader.js";
+import {
+  createSignalRouter,
+  type SignalRoutesDependencies,
+} from "./routes/signal.routes.js";
 import type {
   ApplicationState,
 } from "./runtime/application-state.js";
@@ -96,6 +103,8 @@ export function createApp(
     RecoveryRoutesDependencies,
     "auth"
   >,
+  signalReadDependencies?:
+    SignalRoutesDependencies,
 ) {
   const app = express();
 
@@ -281,6 +290,29 @@ export function createApp(
               authEnvironment.trustedOrigins,
             ),
         },
+      }),
+    );
+  }
+
+  const signalReader =
+    signalReadDependencies?.reader ??
+    (
+      sessionManagementDependencies !==
+      undefined
+        ? new PostgresProjectionReader(
+            sessionManagementDependencies.database,
+          )
+        : undefined
+    );
+
+  if (
+    signalReader !==
+    undefined
+  ) {
+    app.use(
+      "/api/v1/signals",
+      createSignalRouter({
+        reader: signalReader,
       }),
     );
   }
