@@ -89,124 +89,20 @@ function requirePositiveSafeInteger(
   return value;
 }
 
-function optionalNestedRecord(
-  root: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | null {
-  const value = root[key];
-
-  if (value === undefined || value === null) {
-    return null;
-  }
-
-  return requireRecord(value, key);
-}
-
-function optionalNestedString(
-  root: Record<string, unknown>,
-  path: readonly string[],
-): string | null {
-  let current: unknown = root;
-
-  for (let index = 0; index < path.length - 1; index += 1) {
-    if (
-      current === null ||
-      typeof current !== "object" ||
-      Array.isArray(current)
-    ) {
-      return null;
-    }
-
-    current = (current as Record<string, unknown>)[path[index]!];
-  }
-
-  if (
-    current === null ||
-    typeof current !== "object" ||
-    Array.isArray(current)
-  ) {
-    return null;
-  }
-
-  const leaf = (current as Record<string, unknown>)[
-    path[path.length - 1]!
-  ];
-
-  if (leaf === undefined || leaf === null) {
-    return null;
-  }
-
-  if (typeof leaf !== "string" || leaf.length === 0) {
-    throw new TypeError(`${path.join(".")} must be a non-empty string`);
-  }
-
-  return leaf;
-}
-
-function firstLifecycleOccurredAt(
-  projection: Record<string, unknown>,
-): string | null {
-  const lifecycle = optionalNestedRecord(projection, "lifecycle");
-
-  if (lifecycle === null) {
-    return null;
-  }
-
-  const events = lifecycle.events;
-
-  if (!Array.isArray(events) || events.length === 0) {
-    return null;
-  }
-
-  const first = requireRecord(events[0], "lifecycle.events[0]");
-  return optionalString(first, "occurredAt");
-}
-
-function requirePublishedAt(
-  projection: Record<string, unknown>,
-): string {
-  return (
-    optionalString(projection, "publishedAt") ??
-    optionalNestedString(projection, ["lifecycle", "publishedAt"]) ??
-    firstLifecycleOccurredAt(projection) ??
-    (() => {
-      throw new TypeError(
-        "SignalProjection must expose publishedAt or a first lifecycle occurredAt",
-      );
-    })()
-  );
-}
-
-function resolveExpiresAt(
-  projection: Record<string, unknown>,
-): string | null {
-  return (
-    optionalString(projection, "expiresAt") ??
-    optionalNestedString(projection, [
-      "plan",
-      "expiration",
-      "expiresAt",
-    ])
-  );
-}
-
-function verifyOptionalPayloadSignalId(
+function verifyPayloadSignalId(
   signalId: string,
   payload: Record<string, unknown>,
+  label: string,
 ): void {
-  const payloadId = payload.id;
+  const payloadSignalId = requireString(
+    payload,
+    "signalId",
+    label,
+  );
 
-  if (payloadId === undefined || payloadId === null) {
-    return;
-  }
-
-  if (typeof payloadId !== "string" || payloadId.length === 0) {
-    throw new TypeError("payload.id must be a non-empty string");
-  }
-
-  if (payloadId !== signalId) {
+  if (payloadSignalId !== signalId) {
     throw new ProjectionPersistenceConflictError(
-      "signal_id_payload_id_mismatch",
+      "signal_id_payload_signal_id_mismatch",
     );
   }
 }
@@ -229,11 +125,10 @@ export class PostgresProjectionWriter implements ProjectionWriter {
     const signalId = requireSignalId(signalIdInput);
     const payload = requireRecord(payloadInput, "SignalProjection");
 
-    verifyOptionalPayloadSignalId(signalId, payload);
-
-    const marketContext = requireRecord(
-      payload.marketContext,
-      "SignalProjection.marketContext",
+    verifyPayloadSignalId(
+      signalId,
+      payload,
+      "SignalProjection",
     );
 
     const result = await this.sql.query(
@@ -255,12 +150,12 @@ export class PostgresProjectionWriter implements ProjectionWriter {
       [
         signalId,
         FROZEN_SCHEMA_SHA256,
-        requireString(marketContext, "exchange", "marketContext"),
-        requireString(marketContext, "market", "marketContext"),
-        requireString(marketContext, "symbol", "marketContext"),
+        requireString(payload, "exchange", "SignalProjection"),
+        requireString(payload, "market", "SignalProjection"),
+        requireString(payload, "symbol", "SignalProjection"),
         requireString(payload, "direction", "SignalProjection"),
-        requirePublishedAt(payload),
-        resolveExpiresAt(payload),
+        requireString(payload, "publishedAt", "SignalProjection"),
+        requireString(payload, "expiresAt", "SignalProjection"),
         JSON.stringify(payload),
       ],
     );
@@ -279,6 +174,12 @@ export class PostgresProjectionWriter implements ProjectionWriter {
     const signalId = requireSignalId(signalIdInput);
     const payload = requireRecord(
       payloadInput,
+      "SignalLifecycleEvent",
+    );
+
+    verifyPayloadSignalId(
+      signalId,
+      payload,
       "SignalLifecycleEvent",
     );
 
@@ -337,18 +238,36 @@ export class PostgresProjectionWriter implements ProjectionWriter {
     const signalId = requireSignalId(signalIdInput);
     const payload = requireRecord(payloadInput, "SignalSnapshot");
 
-    const lifecycleState =
-      optionalString(payload, "currentState") ??
-      optionalString(payload, "lifecycleState");
+    verifyPayloadSignalId(
+      signalId,
+      payload,
+      "SignalSnapshot",
+    );
 
-    if (lifecycleState === null) {
-      throw new TypeError(
-        "SignalSnapshot.currentState must be a non-empty string",
-      );
-    }
+    const lifecycleState = requireString(
+      payload,
+      "lifecycleState",
+      "SignalSnapshot",
+    );
+
+    const updatedAt = requireString(
+      payload,
+      "updatedAt",
+      "SignalSnapshot",
+    );
 
     const result = await this.sql.query(
       `
+        WITH event_frontier AS (
+          SELECT
+            sequence,
+            to_state,
+            occurred_at
+          FROM projection.signal_events
+          WHERE signal_id = $1
+          ORDER BY sequence DESC
+          LIMIT 1
+        )
         INSERT INTO projection.signal_current (
           signal_id,
           lifecycle_state,
@@ -357,7 +276,17 @@ export class PostgresProjectionWriter implements ProjectionWriter {
           terminal_at,
           snapshot_payload
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+        SELECT
+          $1,
+          $2,
+          event_frontier.sequence,
+          $3,
+          $4,
+          $5::jsonb
+        FROM event_frontier
+        WHERE
+          event_frontier.to_state = $2
+          AND event_frontier.occurred_at <= $3::timestamptz
         ON CONFLICT (signal_id)
         DO UPDATE SET
           lifecycle_state = EXCLUDED.lifecycle_state,
@@ -383,12 +312,7 @@ export class PostgresProjectionWriter implements ProjectionWriter {
       [
         signalId,
         lifecycleState,
-        requirePositiveSafeInteger(
-          payload,
-          "sequence",
-          "SignalSnapshot",
-        ),
-        requireString(payload, "asOf", "SignalSnapshot"),
+        updatedAt,
         optionalString(payload, "terminalAt"),
         JSON.stringify(payload),
       ],
@@ -396,7 +320,7 @@ export class PostgresProjectionWriter implements ProjectionWriter {
 
     if (result.rowCount !== 1) {
       throw new ProjectionPersistenceConflictError(
-        "snapshot_sequence_or_payload_conflict",
+        "snapshot_event_frontier_or_payload_conflict",
       );
     }
   }
@@ -407,6 +331,12 @@ export class PostgresProjectionWriter implements ProjectionWriter {
   ): Promise<void> {
     const signalId = requireSignalId(signalIdInput);
     const payload = requireRecord(payloadInput, "SignalOutcome");
+
+    verifyPayloadSignalId(
+      signalId,
+      payload,
+      "SignalOutcome",
+    );
 
     const result = await this.sql.query(
       `
@@ -433,6 +363,7 @@ export class PostgresProjectionWriter implements ProjectionWriter {
       );
     }
   }
+
 }
 
 export function asProjectionWriter(
