@@ -1,0 +1,555 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:delta:dr-signal-projection:v1",
+  "title": "DELTA DR Signal Projection Contract v1",
+  "type": "object",
+  "required": [
+    "contractName",
+    "contractVersion",
+    "signal",
+    "snapshot",
+    "timeline",
+    "outcome"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contractName": {
+      "const": "DeltaSignalProjection"
+    },
+    "contractVersion": {
+      "const": 1
+    },
+    "signal": {
+      "$ref": "#/$defs/SignalProjection"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/SignalSnapshot"
+    },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SignalLifecycleEvent"
+      }
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/SignalOutcome"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "DecimalString": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "LifecycleState": {
+      "type": "string",
+      "enum": [
+        "PUBLISHED",
+        "WAITING_FOR_ENTRY",
+        "ENTRY_REACHED",
+        "TP1_REACHED",
+        "TP2_REACHED",
+        "TP3_REACHED",
+        "STOP_REACHED"
+      ]
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "SIGNAL_PUBLISHED",
+        "WAITING_FOR_ENTRY",
+        "ENTRY_REACHED",
+        "TP1_REACHED",
+        "TP2_REACHED",
+        "TP3_REACHED",
+        "STOP_REACHED"
+      ]
+    },
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "LONG",
+        "SHORT"
+      ]
+    },
+    "TargetLabel": {
+      "type": "string",
+      "enum": [
+        "TP1",
+        "TP2",
+        "TP3"
+      ]
+    },
+    "TakeProfit": {
+      "type": "object",
+      "required": [
+        "label",
+        "price",
+        "allocationFraction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/TargetLabel"
+        },
+        "price": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "allocationFraction": {
+          "$ref": "#/$defs/DecimalString"
+        }
+      }
+    },
+    "StrategyRef": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "strategyId",
+        "strategyVersion"
+      ],
+      "properties": {
+        "strategyId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategyVersion": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "SignalProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signalId",
+        "exchange",
+        "market",
+        "symbol",
+        "direction",
+        "publishedAt",
+        "expiresAt",
+        "strategy",
+        "tradePlan"
+      ],
+      "properties": {
+        "signalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exchange": {
+          "type": "string",
+          "minLength": 1
+        },
+        "market": {
+          "type": "string",
+          "minLength": 1
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "publishedAt": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "strategy": {
+          "$ref": "#/$defs/StrategyRef"
+        },
+        "tradePlan": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry",
+            "entryZone",
+            "stopLoss",
+            "takeProfits"
+          ],
+          "properties": {
+            "entry": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "referencePrice",
+                "basis"
+              ],
+              "properties": {
+                "referencePrice": {
+                  "$ref": "#/$defs/DecimalString"
+                },
+                "basis": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "entryZone": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lower",
+                "upper",
+                "inclusive"
+              ],
+              "properties": {
+                "lower": {
+                  "$ref": "#/$defs/DecimalString"
+                },
+                "upper": {
+                  "$ref": "#/$defs/DecimalString"
+                },
+                "inclusive": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "stopLoss": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "price",
+                "reasonCode"
+              ],
+              "properties": {
+                "price": {
+                  "$ref": "#/$defs/DecimalString"
+                },
+                "reasonCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "takeProfits": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/TakeProfit"
+                    },
+                    {
+                      "properties": {
+                        "label": {
+                          "const": "TP1"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/TakeProfit"
+                    },
+                    {
+                      "properties": {
+                        "label": {
+                          "const": "TP2"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/TakeProfit"
+                    },
+                    {
+                      "properties": {
+                        "label": {
+                          "const": "TP3"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      }
+    },
+    "SignalLifecycleEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId",
+        "signalId",
+        "sequence",
+        "eventType",
+        "fromState",
+        "toState",
+        "occurredAt",
+        "price",
+        "allocationFraction",
+        "reasonCodes",
+        "sourceVersion"
+      ],
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "eventType": {
+          "$ref": "#/$defs/EventType"
+        },
+        "fromState": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/LifecycleState"
+            }
+          ]
+        },
+        "toState": {
+          "$ref": "#/$defs/LifecycleState"
+        },
+        "occurredAt": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "allocationFraction": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "reasonCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceVersion": {
+          "const": 1
+        }
+      }
+    },
+    "SignalSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signalId",
+        "lifecycleState",
+        "entryReachedAt",
+        "actualEntryPrice",
+        "reachedTargets",
+        "remainingAllocationFraction",
+        "updatedAt",
+        "terminalAt"
+      ],
+      "properties": {
+        "signalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lifecycleState": {
+          "$ref": "#/$defs/LifecycleState"
+        },
+        "entryReachedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Timestamp"
+            }
+          ]
+        },
+        "actualEntryPrice": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "reachedTargets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/TargetLabel"
+          }
+        },
+        "remainingAllocationFraction": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "terminalAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Timestamp"
+            }
+          ]
+        }
+      }
+    },
+    "SignalOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signalId",
+        "finalStatus",
+        "qualityStatus",
+        "asOf",
+        "entry",
+        "reachedTargets",
+        "underlyingReturn",
+        "modeledLeveragedReturn",
+        "netModeledReturn",
+        "mfe",
+        "mae",
+        "fees",
+        "slippage",
+        "funding",
+        "reasonCodes"
+      ],
+      "properties": {
+        "signalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finalStatus": {
+          "type": "string",
+          "enum": [
+            "STOP",
+            "TP3"
+          ]
+        },
+        "qualityStatus": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asOf": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "entry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reached",
+            "occurredAt",
+            "price"
+          ],
+          "properties": {
+            "reached": {
+              "type": "boolean"
+            },
+            "occurredAt": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Timestamp"
+                }
+              ]
+            },
+            "price": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/DecimalString"
+                }
+              ]
+            }
+          }
+        },
+        "reachedTargets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/TargetLabel"
+          }
+        },
+        "underlyingReturn": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "modeledLeveragedReturn": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "netModeledReturn": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "mfe": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "mae": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "fees": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "slippage": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "funding": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "reasonCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
