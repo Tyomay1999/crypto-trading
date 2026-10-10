@@ -15,6 +15,9 @@ const REDACTED = "[REDACTED]";
 const PASSWORD_RESET_PATH =
   /(\/api\/auth\/reset-password\/)[^/?#]+/gi;
 
+const RECOVERY_PATH =
+  /(\/api\/v1\/auth\/mfa\/recovery-codes)(?:[/?#].*)?$/gi;
+
 /*
  * Keep names of sensitive query parameters for
  * diagnostics, but never their values.
@@ -30,6 +33,10 @@ export function redactSensitiveHttpTarget(
   target: string,
 ): string {
   return target
+    .replace(
+      RECOVERY_PATH,
+      `$1/${REDACTED}`,
+    )
     .replace(
       PASSWORD_RESET_PATH,
       `$1${REDACTED}`,

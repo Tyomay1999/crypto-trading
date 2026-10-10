@@ -190,6 +190,50 @@ async function startup(): Promise<void> {
                 observedAt,
               ),
       },
+      {
+        database:
+          databasePool,
+
+        trustedOrigins:
+          authEnv.trustedOrigins,
+
+        /*
+         * totp-replay.ts derives a dedicated,
+         * domain-separated replay HMAC sub-key
+         * from the existing Better Auth secret.
+         */
+        replayPepper:
+          authEnv.replayPepper,
+
+        /*
+         * Public Better Auth crypto helpers use the
+         * same configured secret as the active TOTP
+         * factor encryption contract.
+         */
+        totpEncryptionKey:
+          authEnv.secret,
+
+        observeActivity:
+          (
+            sessionId,
+            observedAt,
+          ) =>
+            sessionActivityHeartbeat
+              .observe(
+                sessionId,
+                observedAt,
+              ),
+      },
+      {
+        database:
+          databasePool,
+
+        trustedOrigins:
+          authEnv.trustedOrigins,
+
+        recoveryPepper:
+          authEnv.recoveryPepper,
+      },
     );
 
     server = app.listen(
