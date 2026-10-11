@@ -70,6 +70,9 @@ import {
   createSignalRouter,
   type SignalRoutesDependencies,
 } from "./routes/signal.routes.js";
+import {
+  createPostgresUserTradingRouter,
+} from "./user-trading/api/composition.js";
 import type {
   ApplicationState,
 } from "./runtime/application-state.js";
@@ -314,6 +317,26 @@ export function createApp(
       createSignalRouter({
         reader: signalReader,
       }),
+    );
+  }
+
+  if (
+    auth !== undefined &&
+    sessionManagementDependencies !==
+      undefined
+  ) {
+    app.use(
+      "/api/v1/me/trading",
+      createRequireSessionMiddleware({
+        auth,
+        observeActivity:
+          sessionManagementDependencies
+            .observeActivity,
+      }),
+      createPostgresUserTradingRouter(
+        sessionManagementDependencies
+          .database,
+      ),
     );
   }
 
