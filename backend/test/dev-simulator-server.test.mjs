@@ -232,3 +232,33 @@ test("control body parser rejects malformed, unexpected, and oversized input", a
     assert.equal(oversized.status, 413);
   });
 });
+
+test("POST /signals/:id/autoplay validates scenario and delay before execution", async () => {
+  await withServer(async ({ baseUrl }) => {
+    await fetch(`${baseUrl}/signals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signalId: "auto-http" }),
+    });
+
+    const badScenario = await fetch(`${baseUrl}/signals/auto-http/autoplay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "UNKNOWN", delayMs: 0 }),
+    });
+    assert.equal(badScenario.status, 400);
+    assert.deepEqual(await badScenario.json(), {
+      error: { code: "invalid_autoplay_scenario" },
+    });
+
+    const badDelay = await fetch(`${baseUrl}/signals/auto-http/autoplay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "TP3", delayMs: 60001 }),
+    });
+    assert.equal(badDelay.status, 400);
+    assert.deepEqual(await badDelay.json(), {
+      error: { code: "invalid_autoplay_delay" },
+    });
+  });
+});

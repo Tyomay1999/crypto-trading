@@ -7,6 +7,11 @@ import {
 import type { AddressInfo } from "node:net";
 
 import type { DevSignalController } from "./control.js";
+import {
+  DEV_AUTOPLAY_SCENARIOS,
+  DevAutoplayService,
+  type DevAutoplayScenario,
+} from "./autoplay.js";
 import { createDemoProjection } from "./scenarios.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -20,6 +25,11 @@ type CreateSignalBody = Readonly<{
   signalId: string;
   symbol?: string;
   direction?: "LONG" | "SHORT";
+}>;
+
+type AutoplayBody = Readonly<{
+  scenario: DevAutoplayScenario;
+  delayMs: number;
 }>;
 
 function sendJson(
@@ -116,6 +126,37 @@ function parseCreateSignalBody(value: unknown): CreateSignalBody {
   return { signalId, symbol, direction };
 }
 
+function parseAutoplayBody(value: unknown): AutoplayBody {
+  const raw = requireObject(value);
+  const allowed = new Set(["scenario", "delayMs"]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      throw new ControlHttpError(400, "unexpected_field");
+    }
+  }
+
+  if (
+    typeof raw.scenario !== "string" ||
+    !DEV_AUTOPLAY_SCENARIOS.includes(raw.scenario as DevAutoplayScenario)
+  ) {
+    throw new ControlHttpError(400, "invalid_autoplay_scenario");
+  }
+
+  if (
+    typeof raw.delayMs !== "number" ||
+    !Number.isSafeInteger(raw.delayMs) ||
+    raw.delayMs < 0 ||
+    raw.delayMs > 60_000
+  ) {
+    throw new ControlHttpError(400, "invalid_autoplay_delay");
+  }
+
+  return {
+    scenario: raw.scenario as DevAutoplayScenario,
+    delayMs: raw.delayMs,
+  };
+}
+
 class ControlHttpError extends Error {
   readonly statusCode: number;
   readonly code: string;
@@ -148,6 +189,12 @@ function mapControllerError(error: unknown): ControlHttpError {
   if (/not allowed/u.test(error.message)) {
     return new ControlHttpError(409, "transition_not_allowed");
   }
+  if (/Autoplay already running/u.test(error.message)) {
+    return new ControlHttpError(409, "autoplay_already_running");
+  }
+  if (/Autoplay requires PUBLISHED/u.test(error.message)) {
+    return new ControlHttpError(409, "autoplay_requires_published");
+  }
 
   return new ControlHttpError(500, "internal_error");
 }
@@ -159,6 +206,8 @@ export function createDevControlServer(
   if (!isLoopbackHost(options.host)) {
     throw new Error("DEV control server must bind to loopback only.");
   }
+
+  const autoplay = new DevAutoplayService(controller);
 
   return createServer(async (request, response) => {
     try {
@@ -197,6 +246,26 @@ export function createDevControlServer(
           }
         });
         const record = await controller.next(decodeURIComponent(segments[1]));
+        sendJson(response, 200, { signal: record });
+        return;
+      }
+
+      if (
+        method === "POST" &&
+        segments.length === 3 &&
+        segments[0] === "signals" &&
+        segments[2] === "autoplay"
+      ) {
+        const body = parseAutoplayBody(await readJsonBody(request));
+        const signalId = decodeURIComponent(segments[1]);
+
+        if (autoplay.isRunning(signalId)) {
+          throw new ControlHttpError(409, "autoplay_already_running");
+        }
+
+        const record = await autoplay.run(signalId, body.scenario, {
+          delayMs: body.delayMs,
+        });
         sendJson(response, 200, { signal: record });
         return;
       }
