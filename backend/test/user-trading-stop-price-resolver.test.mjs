@@ -1,0 +1,9 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+const {PostgresUserTradingStopPriceResolver}=await import("../dist/user-trading/api/index.js");
+function db(row){const calls=[];return{calls,async query(text,values){calls.push({text,values});return{rows:row===null?[]:[row]};}};}
+function row(){return{actual_entry_price:"101.25",projection_payload:{signalId:"signal-a",tradePlan:{takeProfits:[{label:"TP1",price:"110",allocationFraction:"0.3"},{label:"TP2",price:"120",allocationFraction:"0.3"},{label:"TP3",price:"130",allocationFraction:"0.4"}]}}};}
+test("ENTRY stop price comes from owned actual entry",async()=>{const database=db(row());const resolver=new PostgresUserTradingStopPriceResolver(database);assert.equal(await resolver.resolveStopPrice({userId:"user-a",positionId:"position-a",basis:"ENTRY"}),"101.25");assert.deepEqual(database.calls[0].values,["user-a","position-a"]);assert.match(database.calls[0].text,/WHERE p\.user_id = \$1[\s\S]*p\.position_id = \$2/u);});
+test("TP1 and TP2 prices come from projection trade plan",async()=>{for(const [basis,expected] of [["TP1","110"],["TP2","120"]]){const resolver=new PostgresUserTradingStopPriceResolver(db(row()));assert.equal(await resolver.resolveStopPrice({userId:"user-a",positionId:"position-a",basis}),expected);}});
+test("missing position is resolver miss",async()=>{const resolver=new PostgresUserTradingStopPriceResolver(db(null));assert.equal(await resolver.resolveStopPrice({userId:"user-a",positionId:"missing",basis:"ENTRY"}),null);});
+test("resolver is read-only",async()=>{const database=db(row());const resolver=new PostgresUserTradingStopPriceResolver(database);await resolver.resolveStopPrice({userId:"user-a",positionId:"position-a",basis:"TP1"});const sql=database.calls[0].text;assert.match(sql,/FROM app\.user_position/u);assert.match(sql,/JOIN projection\.published_signals/u);assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE)\b/iu);});

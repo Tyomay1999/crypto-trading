@@ -332,6 +332,7 @@ function app(d){
   const a=express(); a.use(express.json());
   a.use("/api/v1/me/trading",createUserTradingRouter({
     readRepository:d.readRepository,ledgerService:d.ledgerService,
+      stopPriceResolver:d.stopPriceResolver,
     resolveTrustedContext:d.resolveTrustedContext,
     now:()=> "2026-10-11T18:00:00.000Z",
     eventIdentity:()=> "generated-id",
@@ -349,23 +350,27 @@ test("client userId query is rejected",async()=>{
 });
 test("client userId body is rejected",async()=>{
   const d=deps(); const r=await request(app(d)).post("/api/v1/me/trading/positions/p/stop")
-    .send({userId:"user-b",basis:"ENTRY",price:"100"});
+    .send({userId:"user-b",basis:"ENTRY"});
   assert.notEqual(r.status,200); assert.equal(d.calls.length,0);
 });
 test("missing or foreign position is generic 404",async()=>{
   const d=deps(); const r=await request(app(d)).get("/api/v1/me/trading/positions/missing").expect(404);
   assert.equal(r.body.error.code,"NOT_FOUND");
 });
-test("stop passes trusted user and idempotency key",async()=>{
-  const d=deps(); await request(app(d)).post("/api/v1/me/trading/positions/p/stop")
-    .send({basis:"ENTRY",price:"100",idempotencyKey:"same-across-devices"}).expect(200);
-  const [,i]=d.calls[0]; assert.equal(i.userId,"user-a"); assert.equal(i.eventIdentity,"same-across-devices");
+test("stop passes trusted user and server-derived price",async()=>{
+  const d=deps();
+  d.stopPriceResolver={async resolveStopPrice(input){assert.equal(input.userId,"user-a");assert.equal(input.positionId,"p");assert.equal(input.basis,"ENTRY");return "100";}};
+  await request(app(d)).post("/api/v1/me/trading/positions/p/stop")
+    .send({basis:"ENTRY",idempotencyKey:"same-across-devices"}).expect(200);
+  const call=d.calls.find(([kind])=>kind==="stop");
+  const [,i]=call; assert.equal(i.userId,"user-a"); assert.equal(i.eventIdentity,"same-across-devices"); assert.equal(i.move.price,"100");
 });
-test("manual exit passes trusted user",async()=>{
-  const d=deps(); await request(app(d)).post("/api/v1/me/trading/positions/p/exit")
-    .send({price:"105",idempotencyKey:"exit-1"}).expect(200);
-  const [,i]=d.calls[0]; assert.equal(i.userId,"user-a");
-  assert.equal(i.exit.occurredAt,"2026-10-11T18:00:00.000Z");
+test("manual exit fails closed without trusted current price source",async()=>{
+  const d=deps();
+  const r=await request(app(d)).post("/api/v1/me/trading/positions/p/exit")
+    .send({idempotencyKey:"exit-1"}).expect(503);
+  assert.equal(r.body.error.code,"PRICE_SOURCE_UNAVAILABLE");
+  assert.equal(d.calls.some(([kind])=>kind==="exit"),false);
 });
 test("production composition uses supported session accessor",async()=>{
   const {readFileSync}=await import("node:fs");

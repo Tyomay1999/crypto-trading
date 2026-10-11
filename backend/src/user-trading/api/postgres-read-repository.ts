@@ -114,6 +114,29 @@ export class PostgresUserTradingApiReadRepository
     }));
   }
 
+  async getPositionDetailByParticipation(
+    userId: string,
+    participationId: string,
+  ): Promise<UserTradingPositionDetail | null> {
+    const result =
+      await this.#db.query<{position_id: string}>(
+        `SELECT position_id
+         FROM app.user_position
+         WHERE user_id = $1
+           AND participation_id = $2
+         LIMIT 1`,
+        [userId, participationId],
+      );
+
+    const row = result.rows[0];
+    if (!row) return null;
+
+    return this.getPositionDetail(
+      userId,
+      row.position_id,
+    );
+  }
+
   async getPositionDetail(userId: string, positionId: string):
     Promise<UserTradingPositionDetail | null> {
     const p = await this.#db.query<PositionRow>(

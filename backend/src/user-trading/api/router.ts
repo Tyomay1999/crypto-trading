@@ -13,6 +13,7 @@ import type {
   UserPlanOverride,
 } from "../planning/types.js";
 import type { PlanningSignalResolver } from "./planning-signal-resolver.js";
+import type { UserTradingStopPriceResolver } from "./stop-price-resolver.js";
 
 
 type StopMoveBasis = "ENTRY" | "TP1" | "TP2";
@@ -28,6 +29,7 @@ export interface UserTradingApiDependencies {
   participationService?: UserSignalParticipationService;
   planningService?: UserTradePlanningService;
   planningSignalResolver?: PlanningSignalResolver;
+  stopPriceResolver?: UserTradingStopPriceResolver;
   reports?: UserTradingReportService;
   resolveTrustedContext(response: Response): TrustedAuthenticatedUserContext;
   now?(): string;
@@ -561,6 +563,30 @@ export function createUserTradingRouter(d: UserTradingApiDependencies): Router {
     } catch (e) { next(e); }
   });
 
+  router.get(
+    "/participations/:participationId/position",
+    async (req,res,next) => {
+      try {
+        rejectIdentity(req,null);
+        const {userId} = d.resolveTrustedContext(res);
+        const participationId = opaque(
+          req.params.participationId,
+          "participationId",
+          128,
+        );
+        const detail = await d.readRepository
+          .getPositionDetailByParticipation(userId,participationId);
+        if (!detail) {
+          res.status(404).json({
+            error:{code:"NOT_FOUND",message:"Resource not found."},
+          });
+          return;
+        }
+        res.status(200).json(detail);
+      } catch (e) { next(e); }
+    },
+  );
+
   router.get("/positions/:positionId", async (req,res,next) => {
     try {
       rejectIdentity(req,null);
@@ -579,13 +605,24 @@ export function createUserTradingRouter(d: UserTradingApiDependencies): Router {
     try {
       const body = bodyObject(req.body);
       rejectIdentity(req,body);
-      exactKeys(body,["basis","price","idempotencyKey"]);
+      exactKeys(body,["basis","idempotencyKey"]);
       const {userId} = d.resolveTrustedContext(res);
       const positionId = opaque(req.params.positionId,"positionId",128);
       const basisValue = opaque(body.basis,"basis",16);
       if (!isStopMoveBasis(basisValue)) throw new TypeError("invalid stop basis");
       const basis: StopMoveBasis = basisValue;
-      const price = opaque(body.price,"price",128);
+      if (d.stopPriceResolver === undefined) {
+        throw new Error("server stop price resolver is unavailable");
+      }
+      const price = await d.stopPriceResolver.resolveStopPrice({
+        userId,positionId,basis,
+      });
+      if (price === null) {
+        res.status(404).json({
+          error:{code:"NOT_FOUND",message:"Resource not found."},
+        });
+        return;
+      }
       const eventIdentity = body.idempotencyKey === undefined
         ? nextIdentity() : opaque(body.idempotencyKey,"idempotencyKey",256);
       sendResult(res,await d.ledgerService.moveStop({
@@ -598,16 +635,22 @@ export function createUserTradingRouter(d: UserTradingApiDependencies): Router {
     try {
       const body = bodyObject(req.body);
       rejectIdentity(req,body);
-      exactKeys(body,["price","idempotencyKey"]);
+      exactKeys(body,["idempotencyKey"]);
       const {userId} = d.resolveTrustedContext(res);
       const positionId = opaque(req.params.positionId,"positionId",128);
-      const price = opaque(body.price,"price",128);
-      const eventIdentity = body.idempotencyKey === undefined
-        ? nextIdentity() : opaque(body.idempotencyKey,"idempotencyKey",256);
-      const at = now();
-      sendResult(res,await d.ledgerService.manualExit({
-        userId,positionId,eventIdentity,observedAt:at,exit:{price,occurredAt:at},
-      }));
+      const detail = await d.readRepository.getPositionDetail(userId,positionId);
+      if (!detail) {
+        res.status(404).json({
+          error:{code:"NOT_FOUND",message:"Resource not found."},
+        });
+        return;
+      }
+      res.status(503).json({
+        error:{
+          code:"PRICE_SOURCE_UNAVAILABLE",
+          message:"Manual exit is unavailable until a trusted current market price source is configured.",
+        },
+      });
     } catch (e) { next(e); }
   });
 

@@ -17,6 +17,7 @@ import {
   type ExchangeAccountSnapshotProvider,
 } from "../planning/index.js";
 import { PostgresPlanningSignalResolver } from "./planning-signal-resolver.js";
+import { PostgresUserTradingStopPriceResolver } from "./stop-price-resolver.js";
 
 
 export function createPostgresUserTradingRouter(
@@ -71,6 +72,8 @@ export function createPostgresUserTradingRouter(
     planningService === undefined
       ? undefined
       : new PostgresPlanningSignalResolver(pool);
+  const stopPriceResolver =
+    new PostgresUserTradingStopPriceResolver(pool);
   return createUserTradingRouter({
     readRepository:new PostgresUserTradingApiReadRepository(pool),
     ledgerService,
@@ -82,6 +85,7 @@ export function createPostgresUserTradingRouter(
           planningService,
           planningSignalResolver,
         }),
+    stopPriceResolver,
     reports,
     resolveTrustedContext:(response:Response)=>({
       userId:getCurrentSessionContext(response).userId,

@@ -23,4 +23,8 @@ export interface UserTradingApiReadRepository {
     Promise<readonly UserTradingParticipationView[]>;
   getPositionDetail(userId: string, positionId: string):
     Promise<UserTradingPositionDetail | null>;
+  getPositionDetailByParticipation(
+    userId: string,
+    participationId: string,
+  ): Promise<UserTradingPositionDetail | null>;
 }
