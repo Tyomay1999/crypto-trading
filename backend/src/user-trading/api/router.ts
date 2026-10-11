@@ -5,6 +5,15 @@ import type { NextFunction, Request, Response, Router } from "express";
 import { Router as createRouter } from "express";
 import type { UserTradingLedgerService } from "../ledger/service.js";
 import type { UserTradingApiReadRepository } from "./types.js";
+import type { UserSignalParticipationService } from "../participation/service.js";
+import type { UserTradePlanningService } from "../planning/service.js";
+import type {
+  MarginMode,
+  RiskPolicy,
+  UserPlanOverride,
+} from "../planning/types.js";
+import type { PlanningSignalResolver } from "./planning-signal-resolver.js";
+
 
 type StopMoveBasis = "ENTRY" | "TP1" | "TP2";
 
@@ -16,6 +25,9 @@ export interface TrustedAuthenticatedUserContext { userId: string; }
 export interface UserTradingApiDependencies {
   readRepository: UserTradingApiReadRepository;
   ledgerService: UserTradingLedgerService;
+  participationService?: UserSignalParticipationService;
+  planningService?: UserTradePlanningService;
+  planningSignalResolver?: PlanningSignalResolver;
   reports?: UserTradingReportService;
   resolveTrustedContext(response: Response): TrustedAuthenticatedUserContext;
   now?(): string;
@@ -48,6 +60,168 @@ function exactKeys(body: Record<string, unknown>, allowed: readonly string[]): v
   for (const key of Object.keys(body)) {
     if (!set.has(key)) throw new TypeError(`unexpected field: ${key}`);
   }
+}
+
+function optionalOpaque(
+  value: unknown,
+  field: string,
+  max = 256,
+): string | undefined {
+  return value === undefined
+    ? undefined
+    : opaque(value, field, max);
+}
+
+function nullableOpaque(
+  value: unknown,
+  field: string,
+  max = 256,
+): string | null {
+  return value === null
+    ? null
+    : opaque(value, field, max);
+}
+
+function marginMode(
+  value: unknown,
+  field: string,
+): MarginMode {
+  const parsed = opaque(value, field, 16);
+  if (parsed !== "ISOLATED" && parsed !== "CROSS") {
+    throw new TypeError(`${field} is invalid`);
+  }
+  return parsed;
+}
+
+function parsePlanBody(
+  body: Record<string, unknown>,
+): {
+  accountReference: string | null;
+  currency: string;
+  policy: RiskPolicy;
+  override?: UserPlanOverride;
+} {
+  exactKeys(
+    body,
+    [
+      "accountReference",
+      "currency",
+      "policy",
+      "override",
+    ],
+  );
+
+  const accountReference =
+    body.accountReference === undefined
+      ? null
+      : nullableOpaque(
+          body.accountReference,
+          "accountReference",
+          128,
+        );
+
+  const currency =
+    body.currency === undefined
+      ? "USDT"
+      : opaque(body.currency, "currency", 16);
+
+  const rawPolicy =
+    bodyObject(body.policy);
+
+  exactKeys(
+    rawPolicy,
+    [
+      "targetRiskFraction",
+      "reserveFraction",
+      "maxLeverage",
+      "marginMode",
+    ],
+  );
+
+  const policy: RiskPolicy = {
+    targetRiskFraction:
+      opaque(
+        rawPolicy.targetRiskFraction,
+        "policy.targetRiskFraction",
+        64,
+      ),
+    reserveFraction:
+      opaque(
+        rawPolicy.reserveFraction,
+        "policy.reserveFraction",
+        64,
+      ),
+    maxLeverage:
+      opaque(
+        rawPolicy.maxLeverage,
+        "policy.maxLeverage",
+        32,
+      ),
+    marginMode:
+      marginMode(
+        rawPolicy.marginMode,
+        "policy.marginMode",
+      ),
+  };
+
+  if (body.override === undefined) {
+    return {
+      accountReference,
+      currency,
+      policy,
+    };
+  }
+
+  const rawOverride =
+    bodyObject(body.override);
+
+  exactKeys(
+    rawOverride,
+    [
+      "selectedPositionNotional",
+      "selectedLeverage",
+      "marginMode",
+    ],
+  );
+
+  const selectedPositionNotional =
+    optionalOpaque(
+      rawOverride.selectedPositionNotional,
+      "override.selectedPositionNotional",
+      128,
+    );
+  const selectedLeverage =
+    optionalOpaque(
+      rawOverride.selectedLeverage,
+      "override.selectedLeverage",
+      32,
+    );
+  const overrideMarginMode =
+    rawOverride.marginMode === undefined
+      ? undefined
+      : marginMode(
+          rawOverride.marginMode,
+          "override.marginMode",
+        );
+
+  const override: UserPlanOverride = {
+    ...(selectedPositionNotional === undefined
+      ? {}
+      : { selectedPositionNotional }),
+    ...(selectedLeverage === undefined
+      ? {}
+      : { selectedLeverage }),
+    ...(overrideMarginMode === undefined
+      ? {}
+      : { marginMode: overrideMarginMode }),
+  };
+
+  return {
+    accountReference,
+    currency,
+    policy,
+    override,
+  };
 }
 function sendResult(res: Response, result: any): void {
   if (result?.kind === "APPLIED" || result?.kind === "IDEMPOTENT_REPLAY") {
@@ -108,6 +282,271 @@ export function createUserTradingRouter(d: UserTradingApiDependencies): Router {
   const router = createRouter();
   const now = d.now ?? (() => new Date().toISOString());
   const nextIdentity = d.eventIdentity ?? (() => `http:${randomUUID()}`);
+
+  if (d.participationService !== undefined) {
+    router.post(
+      "/signals/:signalId/follow",
+      async (req,res,next) => {
+        try {
+          const body = bodyObject(req.body ?? {});
+          rejectIdentity(req,body);
+          exactKeys(body,[]);
+          const {userId} =
+            d.resolveTrustedContext(res);
+          const signalId =
+            opaque(
+              req.params.signalId,
+              "signalId",
+              128,
+            );
+          const result =
+            await d.participationService!
+              .followSignal(
+                userId,
+                signalId,
+              );
+
+          if (
+            result.kind === "CREATED" ||
+            result.kind === "EXISTING"
+          ) {
+            res.status(200).json(result);
+            return;
+          }
+
+          if (
+            result.kind ===
+            "SIGNAL_NOT_FOUND"
+          ) {
+            res.status(404).json({
+              error:{
+                code:"NOT_FOUND",
+                message:"Resource not found.",
+              },
+            });
+            return;
+          }
+
+          throw new Error(
+            "unexpected follow result",
+          );
+        } catch (e) {
+          next(e);
+        }
+      },
+    );
+
+    router.post(
+      "/participations/:participationId/unfollow",
+      async (req,res,next) => {
+        try {
+          const body = bodyObject(req.body ?? {});
+          rejectIdentity(req,body);
+          exactKeys(body,[]);
+          const {userId} =
+            d.resolveTrustedContext(res);
+          const participationId =
+            opaque(
+              req.params.participationId,
+              "participationId",
+              128,
+            );
+          const result =
+            await d.participationService!
+              .unfollowParticipation(
+                userId,
+                participationId,
+              );
+
+          if (
+            result.kind === "CANCELLED" ||
+            result.kind === "ALREADY_TERMINAL"
+          ) {
+            res.status(200).json(result);
+            return;
+          }
+
+          if (result.kind === "NOT_FOUND") {
+            res.status(404).json({
+              error:{
+                code:"NOT_FOUND",
+                message:"Resource not found.",
+              },
+            });
+            return;
+          }
+
+          if (
+            result.kind ===
+            "ACTIVE_CONFLICT"
+          ) {
+            res.status(409).json({
+              error:{
+                code:"CONFLICT",
+                message:
+                  "Request conflicts with current trading state.",
+              },
+            });
+            return;
+          }
+
+          throw new Error(
+            "unexpected unfollow result",
+          );
+        } catch (e) {
+          next(e);
+        }
+      },
+    );
+  }
+
+  if (
+    d.planningService !== undefined &&
+    d.planningSignalResolver !== undefined
+  ) {
+    router.post(
+      "/participations/:participationId/plan",
+      async (req,res,next) => {
+        try {
+          const body = bodyObject(req.body);
+          rejectIdentity(req,body);
+
+          for (
+            const forbidden of [
+              "signal",
+              "signalId",
+              "direction",
+              "entryPrice",
+              "stopPrice",
+              "exchange",
+              "availableBalance",
+              "equity",
+            ]
+          ) {
+            if (
+              Object.prototype.hasOwnProperty.call(
+                body,
+                forbidden,
+              )
+            ) {
+              throw new TypeError(
+                `${forbidden} is server-authoritative`,
+              );
+            }
+          }
+
+          const {
+            accountReference,
+            currency,
+            policy,
+            override,
+          } =
+            parsePlanBody(body);
+
+          const {userId} =
+            d.resolveTrustedContext(res);
+          const participationId =
+            opaque(
+              req.params.participationId,
+              "participationId",
+              128,
+            );
+
+          const participations =
+            await d.readRepository
+              .listParticipations(
+                userId,
+                100,
+              );
+
+          const participation =
+            participations.find(
+              (item) =>
+                item.participationId ===
+                participationId,
+            );
+
+          if (!participation) {
+            res.status(404).json({
+              error:{
+                code:"NOT_FOUND",
+                message:"Resource not found.",
+              },
+            });
+            return;
+          }
+
+          const facts =
+            await d.planningSignalResolver!
+              .getSignalFacts(
+                participation.signalId,
+              );
+
+          if (!facts) {
+            res.status(404).json({
+              error:{
+                code:"NOT_FOUND",
+                message:"Resource not found.",
+              },
+            });
+            return;
+          }
+
+          const result =
+            await d.planningService!
+              .buildPlan({
+                userId,
+                participationId,
+                signal:facts.signal,
+                account:{
+                  exchange:facts.exchange,
+                  accountReference,
+                  currency,
+                },
+                policy,
+                ...(override === undefined
+                  ? {}
+                  : {override}),
+              });
+
+          if (result.kind === "PLANNED") {
+            res.status(200).json(result);
+            return;
+          }
+
+          if (result.kind === "NOT_FOUND") {
+            res.status(404).json({
+              error:{
+                code:"NOT_FOUND",
+                message:"Resource not found.",
+              },
+            });
+            return;
+          }
+
+          if (
+            result.kind ===
+            "STATE_CONFLICT"
+          ) {
+            res.status(409).json({
+              error:{
+                code:"CONFLICT",
+                message:
+                  "Request conflicts with current trading state.",
+              },
+            });
+            return;
+          }
+
+          throw new Error(
+            "unexpected planning result",
+          );
+        } catch (e) {
+          next(e);
+        }
+      },
+    );
+  }
 
   router.get("/participations", async (req, res, next) => {
     try {
