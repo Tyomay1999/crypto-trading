@@ -1,3 +1,5 @@
+import type { UserTradingReportService } from "../reports/service.js";
+import type { UserTradingReportFilter } from "../reports/types.js";
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response, Router } from "express";
 import { Router as createRouter } from "express";
@@ -14,6 +16,7 @@ export interface TrustedAuthenticatedUserContext { userId: string; }
 export interface UserTradingApiDependencies {
   readRepository: UserTradingApiReadRepository;
   ledgerService: UserTradingLedgerService;
+  reports?: UserTradingReportService;
   resolveTrustedContext(response: Response): TrustedAuthenticatedUserContext;
   now?(): string;
   eventIdentity?(): string;
@@ -61,6 +64,44 @@ function sendResult(res: Response, result: any): void {
     res.status(409).json({error:{code:"STALE_STATE",message:"Request is stale."}}); return;
   }
   throw new Error("unexpected user-trading domain result");
+}
+
+
+function reportText(value: unknown, field: string, max: number): string | undefined {
+  if (value === undefined) return undefined;
+  return opaque(value, field, max);
+}
+
+function reportFilter(query: Request["query"]): UserTradingReportFilter {
+  const allowed = new Set(["direction","terminalReason","symbol","strategy","globalTerminalStatus","from","to"]);
+  for (const key of Object.keys(query)) {
+    if (["userId","user_id","ownerId","accountUserId","sessionUserId"].includes(key)) {
+      throw new TypeError("client identity hints are forbidden");
+    }
+    if (!allowed.has(key)) throw new TypeError(`unexpected report filter: ${key}`);
+  }
+  const direction=reportText(query.direction,"direction",8);
+  if (direction!==undefined && direction!=="LONG" && direction!=="SHORT") throw new TypeError("invalid direction");
+  const globalTerminalStatus=reportText(query.globalTerminalStatus,"globalTerminalStatus",8);
+  if (globalTerminalStatus!==undefined && globalTerminalStatus!=="STOP" && globalTerminalStatus!=="TP3") throw new TypeError("invalid globalTerminalStatus");
+  const filter: {
+    direction?: "LONG" | "SHORT";
+    terminalReason?: UserTradingReportFilter["terminalReason"];
+    symbol?: string;
+    strategy?: string;
+    globalTerminalStatus?: "STOP" | "TP3";
+    from?: string;
+    to?: string;
+  } = {};
+  if (direction!==undefined) filter.direction=direction;
+  const terminalReason=reportText(query.terminalReason,"terminalReason",128);
+  if (terminalReason!==undefined) filter.terminalReason=terminalReason as UserTradingReportFilter["terminalReason"];
+  const symbol=reportText(query.symbol,"symbol",64); if (symbol!==undefined) filter.symbol=symbol;
+  const strategy=reportText(query.strategy,"strategy",128); if (strategy!==undefined) filter.strategy=strategy;
+  if (globalTerminalStatus!==undefined) filter.globalTerminalStatus=globalTerminalStatus;
+  const from=reportText(query.from,"from",64); if (from!==undefined) filter.from=from;
+  const to=reportText(query.to,"to",64); if (to!==undefined) filter.to=to;
+  return filter;
 }
 
 export function createUserTradingRouter(d: UserTradingApiDependencies): Router {
@@ -130,6 +171,24 @@ export function createUserTradingRouter(d: UserTradingApiDependencies): Router {
       }));
     } catch (e) { next(e); }
   });
+
+
+  if (d.reports !== undefined) {
+    router.get("/reports/summary", async (req,res,next) => {
+      try {
+        rejectIdentity(req,null);
+        const {userId}=d.resolveTrustedContext(res);
+        res.status(200).json(await d.reports!.summary(userId,reportFilter(req.query)));
+      } catch (e) { next(e); }
+    });
+    router.get("/reports/history", async (req,res,next) => {
+      try {
+        rejectIdentity(req,null);
+        const {userId}=d.resolveTrustedContext(res);
+        res.status(200).json({items:await d.reports!.history(userId,reportFilter(req.query))});
+      } catch (e) { next(e); }
+    });
+  }
 
   return router;
 }

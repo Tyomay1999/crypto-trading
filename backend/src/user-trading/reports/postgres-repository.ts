@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type {
   UserTradingReportBaseRow,
   UserTradingReportFilter,
+  UserTradingReportHistoryRow,
   UserTradingReportRepository,
 } from "./types.js";
 
@@ -26,6 +27,8 @@ interface ReportRow {
   realized_return: string | null;
   realized_fraction: string | null;
   completed_at: string | Date | null;
+  symbol: string | null;
+  strategy: string | null;
 }
 
 function iso(value: string | Date): string {
@@ -67,7 +70,7 @@ implements UserTradingReportRepository {
   async listRows(
     userIdInput: string,
     filter: UserTradingReportFilter,
-  ): Promise<readonly UserTradingReportBaseRow[]> {
+  ): Promise<readonly UserTradingReportHistoryRow[]> {
     const userId = boundedIdentity(userIdInput, "userId");
     const values: unknown[] = [userId];
     const predicates = ["p.user_id = $1"];
@@ -80,6 +83,23 @@ implements UserTradingReportRepository {
     if (filter.terminalReason !== undefined) {
       values.push(filter.terminalReason);
       predicates.push(`o.terminal_reason = $${values.length}`);
+    }
+
+    if (filter.symbol !== undefined) {
+      values.push(filter.symbol);
+      predicates.push(`gs.symbol = $${values.length}`);
+    }
+
+    if (filter.strategy !== undefined) {
+      values.push(filter.strategy);
+      predicates.push(
+        `(gs.canonical->'strategy'->>'strategyId') = $${values.length}`,
+      );
+    }
+
+    if (filter.globalTerminalStatus !== undefined) {
+      values.push(filter.globalTerminalStatus);
+      predicates.push(`o.global_terminal_status = $${values.length}`);
     }
 
     const from = timestamp(filter.from, "from");
@@ -114,8 +134,12 @@ implements UserTradingReportRepository {
          o.realized_pnl,
          o.realized_return,
          o.realized_fraction,
-         o.completed_at
+         o.completed_at,
+         gs.symbol,
+         gs.canonical->'strategy'->>'strategyId' AS strategy
        FROM app.user_signal_participation p
+       LEFT JOIN projection.published_signals gs
+         ON gs.signal_id = p.signal_id
        LEFT JOIN app.user_position pos
          ON pos.participation_id = p.participation_id
         AND pos.user_id = p.user_id
@@ -159,6 +183,8 @@ implements UserTradingReportRepository {
             row.completed_at === null
               ? null
               : iso(row.completed_at),
+          symbol: row.symbol,
+          strategy: row.strategy,
         }),
       ),
     );

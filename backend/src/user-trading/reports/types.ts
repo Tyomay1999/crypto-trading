@@ -31,9 +31,19 @@ export type UserTradingReportBaseRow = Readonly<{
 export type UserTradingReportFilter = Readonly<{
   direction?: PositionDirection;
   terminalReason?: UserTerminalReason;
+  symbol?: string;
+  strategy?: string;
+  globalTerminalStatus?: "STOP" | "TP3";
   from?: string;
   to?: string;
 }>;
+
+export type UserTradingReportHistoryRow =
+  UserTradingReportBaseRow &
+  Readonly<{
+    symbol: string | null;
+    strategy: string | null;
+  }>;
 
 export type UserTradingReportSummary = Readonly<{
   totalParticipations: number;
@@ -58,5 +68,5 @@ export interface UserTradingReportRepository {
   listRows(
     userId: string,
     filter: UserTradingReportFilter,
-  ): Promise<readonly UserTradingReportBaseRow[]>;
+  ): Promise<readonly UserTradingReportHistoryRow[]>;
 }

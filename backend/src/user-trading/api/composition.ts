@@ -3,6 +3,7 @@ import type { Response, Router } from "express";
 import type { Pool } from "pg";
 import { getCurrentSessionContext } from "../../middleware/require-session.js";
 import { PostgresUserTradingLedgerRepository } from "../ledger/postgres-repository.js";
+import { PostgresUserTradingReportRepository, UserTradingReportService } from "../reports/index.js";
 import { UserTradingLedgerService } from "../ledger/service.js";
 import { PostgresUserTradingApiReadRepository } from "./postgres-read-repository.js";
 import { createUserTradingRouter } from "./router.js";
@@ -13,9 +14,13 @@ export function createPostgresUserTradingRouter(pool: Pool): Router {
     repository,
     idFactory:{createEventId:()=>randomUUID()},
   });
+  const reports = new UserTradingReportService(
+    new PostgresUserTradingReportRepository(pool),
+  );
   return createUserTradingRouter({
     readRepository:new PostgresUserTradingApiReadRepository(pool),
     ledgerService,
+    reports,
     resolveTrustedContext:(response:Response)=>({
       userId:getCurrentSessionContext(response).userId,
     }),
