@@ -93,7 +93,7 @@ implements UserTradingReportRepository {
     if (filter.strategy !== undefined) {
       values.push(filter.strategy);
       predicates.push(
-        `(gs.canonical->'strategy'->>'strategyId') = $${values.length}`,
+        `(gs.projection_payload->'strategy'->>'strategyId') = $${values.length}`,
       );
     }
 
@@ -136,7 +136,7 @@ implements UserTradingReportRepository {
          o.realized_fraction,
          o.completed_at,
          gs.symbol,
-         gs.canonical->'strategy'->>'strategyId' AS strategy
+         gs.projection_payload->'strategy'->>'strategyId' AS strategy
        FROM app.user_signal_participation p
        LEFT JOIN projection.published_signals gs
          ON gs.signal_id = p.signal_id
